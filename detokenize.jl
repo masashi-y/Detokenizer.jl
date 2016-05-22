@@ -1,9 +1,28 @@
 using ArgParse
+@everywhere using DistributedArrays
 
 str{S<:AbstractString}(s::SubString{S}) = convert(S, s)
 
-type Detokenizer
-    wikipedia  ::AbstractString
+const SEGLENGTH = 100000
+function segment_read(filename)
+    file = open(filename)
+    line = readline(file)
+    curlen = 0; tmp = ""
+    res = []
+    while !eof(file)
+        tmp *= lowercase(line)
+        curlen += length(line)
+        if curlen > SEGLENGTH
+            push!(res, tmp)
+            tmp = ""; curlen = 0
+        end
+        line = readline(file)
+    end
+    res
+end
+
+@everywhere type Detokenizer
+    wikipedia  #::AbstractString
     not_word   ::Function
     move_left  ::Function
     move_right ::Function
@@ -24,9 +43,9 @@ end
 
 function Detokenizer(rulefile, wikifile)
     characters = ""
-    cache  = Dict{AbstractString,Int}()
+    cache = Dict{AbstractString,Int}()
     right = AbstractString[]
-    dep = Tuple{ASCIIString,ASCIIString}[]
+    dep = Tuple{UTF8String,UTF8String}[]
     info("LOADING RULE FILE")
     for line in open(readlines, rulefile)
         ( length(line) == 0 || !(line[1] in "CLRD") ) && continue
@@ -50,32 +69,24 @@ function Detokenizer(rulefile, wikifile)
     end
     move_left(word)  = word in keys(cache)
     move_right(word) = word in right
-    not_word(word) = ismatch(Regex("[^($characters)]"), word) || ismatch(r"https?://.+", word)
+    not_word(word) = ismatch(Regex("[^($characters)]"), word) #|| !ismatch(r"https?://.+", word)
     info("TO LEFT RULES:", join(keys(cache), ", "))
     info("TO RIGHT RULES:", join(right, ", "))
-    info("LONG DEPENDENCIES:", join(dep, ", "))
+    info("LONG DEPENDENCIES:", join(["($from, $to)" for (from, to) in dep], ", "))
     info("CHARACTERS:", characters)
 
     info("LOADING WIKIPEDIA")
-    wikipedia = readall(wikifile)
+    # wikipedia = readall(wikifile)
+    wikipedia = distribute(segment_read(wikifile))
     info("LOWERCASING..")
-    for char in wikipedia
-        char = lowercase(char)
-    end
+    # for char in wikipedia
+    #     char = lowercase(char)
+    # end
     info("DONE")
     Detokenizer(wikipedia, not_word, move_left, move_right, dep, cache)
 end
 
-# wikipediaを使って縮約するか調べる候補
-# not_word = r"[^a-zA-Z0-9]"
-# url = r"https?://.+"
-# not_alphabetical(word) = ismatch(not_word, word) || ismatch(url, word)
-# not_alphabetical(words...) = any(not_alphabetical, words)
-
-# あまりwikipediaをlookupしすぎないように
-# cache = [k => typemax(Int) for k in ["n\'t", "\'s", "\'d", "\'ve", "\'ll", "\'re", "\'m"]] |> Dict
-
-function searchall(s, t, overlap::Bool=false)
+@everywhere function searchall(s, t, overlap::Bool=false)
     idxfcn = overlap ? first : last
     r = search(s, t)
     n = 0
@@ -85,9 +96,17 @@ function searchall(s, t, overlap::Bool=false)
     end
     n
 end
-function wiki_count(target::AbstractString, de::Detokenizer)
-    res = get!(de.cache, lowercase(target), searchall(de.wikipedia, target))
-    info(lowercase(target), " => ", res)
+@everywhere function wiki_count(de::Detokenizer, target)
+    target = lowercase(" " * target * " ")
+    if target in keys(de.cache)
+        res = de.cache[target]
+        info(target, " => ", res)
+    else
+        # res = searchall(de.wikipedia, target)
+        res = sum(map(x->searchall(x, target), de.wikipedia))
+        de.cache[target] = res
+        info("**No.$(length(de.cache)) ", target, " => ", res)
+    end
     res
 end
 
@@ -103,12 +122,11 @@ function long_dependency(sent, from, to)
     from in sent && to in sent || return res
     tmp = Array{Int}[]
     for (i, word) in enumerate(sent)
-        if word == from
-            push!(tmp, [i])
-        elseif word == to
-            @assert length(tmp[end]) == 1
+        if length(tmp) > 0 && length(tmp[end]) == 1 && word == to
             push!(tmp[end], i)
             push!(res, pop!(tmp))
+        elseif word == from
+            push!(tmp, [i])
         end
     end
     res
@@ -124,12 +142,12 @@ end
 
 function readconll(filename)
     info("LOADING SENTENCES")
-    sents = Array{ASCIIString}[[]]
+    sents = Array{UTF8String}[[]]
     skip = 0:0
     for line in open(readlines, filename, "r")
         line = chomp(line)
         if length(line) == 0
-            push!(sents, ASCIIString[])
+            push!(sents, UTF8String[])
             continue
         end
         line = split(line, "\t")
@@ -137,6 +155,7 @@ function readconll(filename)
         # need to take into account morphologically rich
         if contains(num, "-")
             skip = range(num)
+            push!(sents[end], str(line[2]))
         elseif parse(Int, num) in skip
             continue
         else
@@ -147,7 +166,7 @@ function readconll(filename)
     sents
 end
 
-function detokenize{S<:AbstractString}(sent::Array{S}, de::Detokenizer)
+function detokenize{S<:AbstractString}(sent::Array{S}, de::Detokenizer, out)
     length(sent) == 0 && return
     info("FROM: ", join(sent, " "))
     to_left = [false for w in sent]
@@ -167,20 +186,24 @@ function detokenize{S<:AbstractString}(sent::Array{S}, de::Detokenizer)
     for i in 1:n_words-1
         word1, word2 = sent[i:i+1]
         if !(word1 in de.exceptional) && !to_left[i+1] && (de.not_word(word1) || de.not_word(word2))
-            if wiki_count(word1*word2, de) > wiki_count(word1*" "*word2, de)
+            if wiki_count(de, word1*word2) > wiki_count(de, word1*" "*word2)
                 to_left[i+1] = true
             end
         end
     end
     res = detokenized_sent(sent, to_left)
-    println(res)
+    println(out, res)
     info("TO  : ", res, "\n")
 end
 
-function detokenize{S<:AbstractString}(sents::Array{Array{S}}, de::Detokenizer)
+function detokenize{S<:AbstractString}(sents::Array{Array{S}}, de::Detokenizer, doc)
+    out = open(doc*".detok", "w")
+    info("INPUT: ", doc)
+    info("OUPUT: ", doc*".detok")
     for sent in sents
-        detokenize(sent, de)
+        detokenize(sent, de, out)
     end
+    close(out)
 end
 
 function main()
@@ -188,6 +211,7 @@ function main()
     @add_arg_table s begin
         "--conll", "-c"
             help = "conll file to detokenize"
+            nargs = '+'
             required = true
         "--rules", "-r"
             help = "rule file"
@@ -197,9 +221,11 @@ function main()
             required = true
     end
     args  = parse_args(ARGS, s)
-    sents = readconll(args["conll"])
     de    = Detokenizer(args["rules"], args["wiki"])
-    detokenize(sents, de)
+    for doc in args["conll"]
+        sents = readconll(doc)
+        detokenize(sents, de, doc)
+    end
 end
 
 main()
