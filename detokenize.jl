@@ -7,9 +7,10 @@ const SEGLENGTH = 100000
 function segment_read(filename)
     file = open(filename)
     line = readline(file)
-    curlen = 0; tmp = ""
+    i = 0; curlen = 0; tmp = ""
     res = []
     while !eof(file)
+        print("LINE: ", i+=1, "\r\b")
         tmp *= lowercase(line)
         curlen += length(line)
         if curlen > SEGLENGTH
