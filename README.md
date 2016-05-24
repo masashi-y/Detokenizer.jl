@@ -1,9 +1,12 @@
 # Detokenizer.jl
 program to undo tokenization of corpus data
 
-    usage: detokenize.jl -c CONLL [CONLL...] -r RULES -w WIKI [-h]
+    usage: detokenize.jl [-t TEXT [TEXT...]] [-c CONLL [CONLL...]]
+                         -r RULES -w WIKI [-h]
     
     optional arguments:
+      -t, --text TEXT [TEXT...]
+                            one-sent-per line text file to detokenize
       -c, --conll CONLL [CONLL...]
                             conll file to detokenize
       -r, --rules RULES     rule file
