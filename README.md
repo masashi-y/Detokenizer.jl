@@ -4,7 +4,7 @@ Program to undo tokenization of corpus data.
     In : Al - Zaman : American forces killed Shaikh Abdullah al - Ani , the preacher at the mosque in the town of Qaim , near the Syrian border .
     Out: Al-Zaman: American forces killed Shaikh Abdullah al-Ani, the preacher at the mosque in the town of Qaim, near the Syrian border.
 
-Some detokenization is done by a rule-based manner,
+Some sorts of detokenization (punctuation, paranthesis etc.) is done by a rule-based manner,
 while ambiguous cases (Al-Zaman for example) are treated by choosing more frequent 2,3-gram patterns in wikipedia dump.
 
     usage: detokenize.jl [-t TEXT [TEXT...]] [-c CONLL [CONLL...]]
