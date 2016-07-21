@@ -116,6 +116,25 @@ function detokenized_sent(sent, to_left)
     join([to_left[i] ? word : " "*word for (i, word) in enumerate(sent)])
 end
 
+global idx = 0
+function detokenized_sent_conll(sent, to_left)
+    to_left[1] = true
+    function to_line(word)
+        idx += 1
+        join([idx, word], "\t") * "\n"
+    end
+    res = map(enumerate(sent)) do (i, word)
+        if to_left[i]
+            line = to_line(" ") # line for space
+        else
+            line = ""
+        end
+        line *= to_line(word)
+    end |> join
+    res *= to_line("LF")
+    res
+end
+
 # クオート等の長距離依存を伴うものを調べる
 function long_dependency(sent, from, to)
     res = Array{Int}[]
@@ -207,9 +226,9 @@ function detokenize{S<:AbstractString}(sent::Array{S}, de::Detokenizer, out)
             to_left[i+1] = true
         end
     end
-    res = detokenized_sent(sent, to_left)
+    res = detokenized_sent_conll(sent, to_left)
     println(out, res)
-    info("TO  : ", res, "\n")
+    info("TO  : ", detokenized_sent(sent, to_left), "\n")
 end
 
 function detokenize{S<:AbstractString}(sents::Array{Array{S}}, de::Detokenizer, doc)
